@@ -1,40 +1,126 @@
-# Analisador de CV
+# 📄 Analisador de CV
 
-Este projeto é um analisador de currículos que compara o CV do usuário com uma descrição de vaga e fornece feedback personalizado.
+Um analisador de currículos que compara seu CV com descrições de vagas e fornece feedback personalizado.
 
-## Funcionalidades
+## 🚀 Funcionalidades
 
-- Extração de texto de arquivos PDF e DOCX
-- Análise de palavras-chave e comparação com descrição da vaga
-- Geração de feedback personalizado usando IA
-- Interface web para upload de arquivos
+- ✨ Upload de CV em formato PDF ou DOCX
+- 📊 Análise de compatibilidade com a vaga
+- 🎯 Identificação de palavras-chave e habilidades
+- 💡 Sugestões personalizadas de melhorias
+- 📈 Score de compatibilidade
+- 🔍 Análise detalhada de requisitos
 
-## Requisitos
+## 🛠️ Tecnologias Utilizadas
 
 - Python 3.8+
-- Dependências listadas em `requirements.txt`
+- Flask (Framework web)
+- PyMuPDF (Extração de texto de PDFs)
+- python-docx (Leitura de arquivos Word)
+- FuzzyWuzzy (Análise de similaridade)
 
-## Instalação
+## ⚙️ Pré-requisitos
 
-1. Clone o repositório
-2. Instale as dependências:
+- Python 3.8 ou superior
+- pip (gerenciador de pacotes Python)
+- Git
+
+## 📥 Instalação
+
+1. Clone o repositório:
+
+```bash
+git clone https://github.com/agostinhomarcia/analyzer.git
+cd analyzer
+```
+
+2. Configure o ambiente virtual (opcional, mas recomendado):
+
+```bash
+python -m venv venv
+# No Windows:
+venv\Scripts\activate
+# No Linux/Mac:
+source venv/bin/activate
+```
+
+3. Instale as dependências:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Configure sua chave API da OpenAI:
-   - Crie um arquivo `.env` na raiz do projeto
-   - Adicione sua chave API: `OPENAI_API_KEY=sua_chave_aqui`
+4. Configure as variáveis de ambiente:
 
-## Uso
+```bash
+# Copie o arquivo de exemplo
+cp .env.example .env
+# Edite o arquivo .env e adicione suas configurações
+```
 
-1. Execute o servidor Flask:
+## 🚀 Como Usar
+
+1. Inicie o servidor:
 
 ```bash
 python app.py
 ```
 
-2. Acesse http://localhost:5000 no seu navegador
-3. Faça upload do seu CV e insira a descrição da vaga
-4. Receba feedback personalizado sobre seu CV
+2. Acesse a aplicação:
+
+- Abra seu navegador
+- Acesse `http://127.0.0.1:5000`
+
+3. Use a interface para:
+
+- Fazer upload do seu CV (PDF ou DOCX)
+- Colar a descrição da vaga
+- Receber análise detalhada
+
+## 📊 Análise Fornecida
+
+O sistema analisa:
+
+- 💪 Pontos fortes do seu CV
+- 📋 Requisitos atendidos e faltantes
+- ⏳ Experiência requerida
+- 📚 Formação acadêmica
+- 💡 Recomendações personalizadas
+
+## 🤝 Contribuindo
+
+Contribuições são bem-vindas! Para contribuir:
+
+1. Faça um Fork do projeto
+2. Crie uma branch para sua feature (`git checkout -b feature/AmazingFeature`)
+3. Commit suas mudanças (`git commit -m 'Add some AmazingFeature'`)
+4. Push para a branch (`git push origin feature/AmazingFeature`)
+5. Abra um Pull Request
+
+## 📝 Estrutura do Projeto
+
+```
+analyzer/
+├── app.py              # Aplicação principal
+├── requirements.txt    # Dependências do projeto
+├── .env.example       # Exemplo de configuração
+├── .gitignore        # Arquivos ignorados pelo git
+├── README.md         # Este arquivo
+└── templates/        # Templates HTML
+    └── index.html    # Interface principal
+```
+
+## ⚠️ Notas Importantes
+
+- Mantenha seu arquivo `.env` seguro e nunca o compartilhe
+- A pasta `uploads` é criada automaticamente para arquivos temporários
+- Os arquivos enviados são deletados após a análise
+- O sistema funciona offline, sem depender de APIs externas
+
+## 👩‍💻 Autor
+
+Márcia Agostinho
+
+## 📄 Licença
+
+Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para mais detalhes.
