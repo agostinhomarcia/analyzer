@@ -1,45 +1,66 @@
 from datetime import datetime
 from flask_sqlalchemy import SQLAlchemy
-from werkzeug.security import generate_password_hash, check_password_hash
+import bcrypt
 
 db = SQLAlchemy()
 
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(256), nullable=False)
+    password_hash = db.Column(db.String(128))
     name = db.Column(db.String(100))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     subscription = db.relationship('Subscription', backref='user', uselist=False)
-    analyses = db.relationship('Analysis', backref='user')
+    analyses = db.relationship('Analysis', backref='user', lazy=True)
 
     def set_password(self, password):
-        self.password_hash = generate_password_hash(password)
+        if isinstance(password, str):
+            password = password.encode('utf-8')
+        salt = bcrypt.gensalt()
+        password_hash = bcrypt.hashpw(password, salt)
+        self.password_hash = password_hash.decode('utf-8')
 
     def check_password(self, password):
-        return check_password_hash(self.password_hash, password)
+        if not self.password_hash:
+            return False
+        if isinstance(password, str):
+            password = password.encode('utf-8')
+        if isinstance(self.password_hash, str):
+            stored_hash = self.password_hash.encode('utf-8')
+        else:
+            stored_hash = self.password_hash
+        try:
+            return bcrypt.checkpw(password, stored_hash)
+        except Exception as e:
+            print(f"Erro ao verificar senha: {e}")
+            return False
 
 class Subscription(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    plan_type = db.Column(db.String(20), nullable=False)  # 'free', 'premium', 'business'
-    analyses_remaining = db.Column(db.Integer, nullable=False)
-    expires_at = db.Column(db.DateTime, nullable=False)
+    plan_type = db.Column(db.String(50), default='free')  # free, premium, business
+    remaining_analyses = db.Column(db.Integer, default=3)
+    expires_at = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    @property
-    def is_active(self):
-        return self.expires_at > datetime.utcnow()
+    stripe_subscription_id = db.Column(db.String(255))
+    status = db.Column(db.String(50), default='active')
 
     def can_analyze(self):
-        return self.is_active and self.analyses_remaining > 0
+        """Verifica se o usuário pode fazer mais análises"""
+        if not self.expires_at or self.expires_at < datetime.utcnow():
+            return False
+        
+        if self.plan_type == 'business':
+            return True
+        
+        return self.remaining_analyses > 0
 
     def use_analysis(self):
-        if self.can_analyze():
-            self.analyses_remaining -= 1
-            return True
-        return False
+        """Registra o uso de uma análise"""
+        if self.plan_type != 'business' and self.remaining_analyses > 0:
+            self.remaining_analyses -= 1
+            db.session.commit()
 
 class Analysis(db.Model):
     id = db.Column(db.Integer, primary_key=True)

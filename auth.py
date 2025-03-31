@@ -1,9 +1,10 @@
-from flask import Blueprint, request, jsonify, session
+from flask import Blueprint, request, jsonify, session, current_app
 from models import db, User, Subscription, SUBSCRIPTION_PLANS
 from datetime import datetime, timedelta
 import jwt
 from functools import wraps
 import os
+import traceback
 
 auth = Blueprint('auth', __name__)
 
@@ -44,7 +45,7 @@ def register():
     # Create free subscription
     subscription = Subscription(
         plan_type='free',
-        analyses_remaining=SUBSCRIPTION_PLANS['free']['analyses_per_month'],
+        remaining_analyses=SUBSCRIPTION_PLANS['free']['analyses_per_month'],
         expires_at=datetime.utcnow() + timedelta(days=30)
     )
     
@@ -58,30 +59,65 @@ def register():
         os.getenv('JWT_SECRET_KEY')
     )
     
-    response = jsonify({'message': 'Usuário registrado com sucesso'})
-    response.set_cookie('token', token, httponly=True, secure=True)
+    response = jsonify({
+        'message': 'Usuário registrado com sucesso',
+        'user': {
+            'id': user.id,
+            'email': user.email,
+            'name': user.name
+        }
+    })
+    response.set_cookie('token', token, httponly=True, secure=False, samesite='Lax')
     return response
 
 @auth.route('/login', methods=['POST'])
 def login():
-    data = request.get_json()
-    
-    if not data or not data.get('email') or not data.get('password'):
-        return jsonify({'message': 'Dados incompletos'}), 400
+    try:
+        data = request.get_json()
+        current_app.logger.info(f"Tentativa de login para: {data.get('email') if data else 'No data'}")
         
-    user = User.query.filter_by(email=data['email']).first()
-    
-    if not user or not user.check_password(data['password']):
-        return jsonify({'message': 'Email ou senha inválidos'}), 401
+        if not data:
+            return jsonify({'message': 'Dados não fornecidos'}), 400
+            
+        email = data.get('email')
+        password = data.get('password')
         
-    token = jwt.encode(
-        {'user_id': user.id, 'exp': datetime.utcnow() + timedelta(days=30)},
-        os.getenv('JWT_SECRET_KEY')
-    )
-    
-    response = jsonify({'message': 'Login realizado com sucesso'})
-    response.set_cookie('token', token, httponly=True, secure=True)
-    return response
+        if not email or not password:
+            return jsonify({'message': 'Email e senha são obrigatórios'}), 400
+            
+        user = User.query.filter_by(email=email).first()
+        current_app.logger.info(f"Usuário encontrado: {user is not None}")
+        
+        if not user:
+            return jsonify({'message': 'Email ou senha inválidos'}), 401
+            
+        if not user.check_password(password):
+            current_app.logger.info("Senha inválida")
+            return jsonify({'message': 'Email ou senha inválidos'}), 401
+            
+        token = jwt.encode(
+            {'user_id': user.id, 'exp': datetime.utcnow() + timedelta(days=30)},
+            os.getenv('JWT_SECRET_KEY')
+        )
+        
+        response = jsonify({
+            'message': 'Login realizado com sucesso',
+            'user': {
+                'id': user.id,
+                'email': user.email,
+                'name': user.name
+            }
+        })
+        response.set_cookie('token', token, httponly=True, secure=False, samesite='Lax')
+        return response
+        
+    except Exception as e:
+        current_app.logger.error(f"Erro no login: {str(e)}")
+        current_app.logger.error(traceback.format_exc())
+        return jsonify({
+            'message': 'Erro ao processar login',
+            'error': str(e)
+        }), 500
 
 @auth.route('/logout')
 def logout():

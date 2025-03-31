@@ -8,6 +8,7 @@ from subscription import subscription
 import fitz  # PyMuPDF
 from docx import Document
 import werkzeug
+import traceback
 
 # Load environment variables
 load_dotenv()
@@ -15,12 +16,29 @@ load_dotenv()
 # Configure OpenAI
 openai.api_key = os.getenv('OPENAI_API_KEY')
 
+# Get absolute paths
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+INSTANCE_PATH = os.path.join(BASE_DIR, 'instance')
+DB_PATH = os.path.join(INSTANCE_PATH, 'app.db')
+
+# Ensure instance directory exists
+os.makedirs(INSTANCE_PATH, exist_ok=True)
+
+# Initialize Flask app
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
-app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///app.db')
+app.config['UPLOAD_FOLDER'] = os.path.join(BASE_DIR, 'uploads')
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{DB_PATH}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev')
+
+# Configurações de desenvolvimento
+app.config['SESSION_COOKIE_SECURE'] = False
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['REMEMBER_COOKIE_SECURE'] = False
+app.config['REMEMBER_COOKIE_HTTPONLY'] = True
+app.config['REMEMBER_COOKIE_SAMESITE'] = 'Lax'
 
 # Initialize extensions
 db.init_app(app)
@@ -33,8 +51,16 @@ app.register_blueprint(subscription, url_prefix='/subscription')
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # Create database tables
-with app.app_context():
-    db.create_all()
+def init_db():
+    with app.app_context():
+        # Remove existing database file if it exists
+        if os.path.exists(DB_PATH):
+            os.remove(DB_PATH)
+        db.create_all()
+        print(f"Database initialized successfully at {DB_PATH}")
+
+# Initialize database on startup
+init_db()
 
 def allowed_file(filename):
     """Check if the file extension is allowed."""
@@ -113,7 +139,8 @@ Use emojis adequados para cada seção e mantenha o tom profissional e construti
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    stripe_public_key = os.getenv('STRIPE_PUBLIC_KEY', '')
+    return render_template('index.html', stripe_public_key=stripe_public_key)
 
 @app.route('/analyze', methods=['POST'])
 @token_required
@@ -197,6 +224,25 @@ def get_history(current_user):
         'created_at': a.created_at.isoformat(),
         'using_ai': a.using_ai
     } for a in analyses])
+
+# Error handlers
+@app.errorhandler(500)
+def handle_500_error(error):
+    app.logger.error(f'Internal error: {error}')
+    app.logger.error(traceback.format_exc())
+    return jsonify({
+        'error': 'Erro interno do servidor',
+        'message': str(error)
+    }), 500
+
+@app.errorhandler(Exception)
+def handle_exception(error):
+    app.logger.error(f'Unhandled exception: {error}')
+    app.logger.error(traceback.format_exc())
+    return jsonify({
+        'error': 'Erro inesperado',
+        'message': str(error)
+    }), 500
 
 if __name__ == '__main__':
     app.run(debug=True) 
