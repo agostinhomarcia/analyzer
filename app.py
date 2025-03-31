@@ -1,240 +1,114 @@
 import os
-from flask import Flask, request, render_template, jsonify
+from flask import Flask, request, render_template, jsonify, send_from_directory
+from dotenv import load_dotenv
+import openai
+from models import db, User, Subscription, Analysis, SUBSCRIPTION_PLANS
+from auth import auth, token_required
+from subscription import subscription
 import fitz  # PyMuPDF
 from docx import Document
-from fuzzywuzzy import fuzz
-from dotenv import load_dotenv
-import re
-from collections import defaultdict
+import werkzeug
 
 # Load environment variables
 load_dotenv()
 
+# Configure OpenAI
+openai.api_key = os.getenv('OPENAI_API_KEY')
+
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///app.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev')
+
+# Initialize extensions
+db.init_app(app)
+
+# Register blueprints
+app.register_blueprint(auth, url_prefix='/auth')
+app.register_blueprint(subscription, url_prefix='/subscription')
 
 # Ensure upload folder exists
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# Predefined skills and categories
-SKILL_CATEGORIES = {
-    'programming_languages': [
-        'python', 'java', 'javascript', 'typescript', 'c++', 'c#', 'ruby', 'php',
-        'swift', 'kotlin', 'go', 'rust', 'scala', 'perl', 'r', 'matlab'
-    ],
-    'web_technologies': [
-        'html', 'css', 'react', 'angular', 'vue', 'node.js', 'django', 'flask',
-        'spring', 'asp.net', 'express', 'jquery', 'bootstrap', 'tailwind',
-        'graphql', 'rest', 'api', 'apis', 'rest api', 'restful', 'websocket'
-    ],
-    'databases': [
-        'sql', 'mysql', 'postgresql', 'mongodb', 'oracle', 'sqlite', 'redis',
-        'elasticsearch', 'cassandra', 'dynamodb', 'firebase'
-    ],
-    'cloud_platforms': [
-        'aws', 'azure', 'gcp', 'google cloud', 'heroku', 'digitalocean',
-        'kubernetes', 'docker', 'terraform', 'jenkins'
-    ],
-    'soft_skills': [
-        'liderança', 'comunicação', 'trabalho em equipe', 'proativo',
-        'resolução de problemas', 'organização', 'gestão de tempo',
-        'adaptabilidade', 'criatividade', 'inovação', 'autonomia',
-        'proatividade', 'colaboração', 'aprendizado contínuo'
-    ],
-    'methodologies': [
-        'agile', 'scrum', 'kanban', 'lean', 'waterfall', 'tdd', 'bdd',
-        'devops', 'ci/cd', 'xp', 'ágil'
-    ],
-    'security': [
-        'autenticação', 'autorização', 'oauth', 'jwt', 'segurança',
-        'criptografia', 'ssl', 'https', 'firewall', 'pentest'
-    ],
-    'quality': [
-        'qualidade de código', 'code review', 'testes unitários',
-        'testes de integração', 'testes automatizados', 'qa',
-        'garantia de qualidade', 'debugging', 'performance'
-    ]
-}
+# Create database tables
+with app.app_context():
+    db.create_all()
 
-def extract_text_from_pdf(pdf_path):
-    """Extract text from PDF file."""
-    doc = fitz.open(pdf_path)
-    text = ""
-    for page in doc:
-        text += page.get_text()
-    return text
+def allowed_file(filename):
+    """Check if the file extension is allowed."""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in {'pdf', 'docx'}
 
-def extract_text_from_docx(docx_path):
-    """Extract text from DOCX file."""
-    doc = Document(docx_path)
-    text = ""
-    for paragraph in doc.paragraphs:
-        text += paragraph.text + "\n"
-    return text
+def extract_text_from_pdf(file_path):
+    """Extract text from a PDF file."""
+    try:
+        text = ""
+        with fitz.open(file_path) as pdf:
+            for page in pdf:
+                text += page.get_text()
+        return text.strip()
+    except Exception as e:
+        print(f"Error extracting text from PDF: {e}")
+        return None
 
-def find_skills(text):
-    """Find skills in text and categorize them."""
-    text = text.lower()
-    found_skills = defaultdict(list)
-    
-    for category, skills in SKILL_CATEGORIES.items():
-        for skill in skills:
-            if skill.lower() in text:
-                found_skills[category].append(skill)
-    
-    return found_skills
-
-def extract_requirements(job_description):
-    """Extract key requirements from job description."""
-    text = job_description.lower()
-    requirements = {
-        'required_skills': [],
-        'preferred_skills': [],
-        'experience_years': None,
-        'education': []
-    }
-    
-    # Find required skills - first try with explicit sections
-    required_patterns = [
-        r'requisitos:.*?(?=\n\n|\Z)',
-        r'necessário:.*?(?=\n\n|\Z)',
-        r'obrigatório:.*?(?=\n\n|\Z)',
-        r'required:.*?(?=\n\n|\Z)'
-    ]
-    
-    skills_found = False
-    for pattern in required_patterns:
-        matches = re.findall(pattern, text, re.DOTALL)
-        if matches:
-            for match in matches:
-                skills = re.findall(r'[\w\+\#]+(?:\s+[\w\+\#]+)*', match)
-                requirements['required_skills'].extend(skills)
-                skills_found = True
-    
-    # If no explicit sections found, extract skills from the entire text
-    if not skills_found:
-        # Split text into words and phrases
-        words = re.findall(r'[\w\+\#]+(?:\s+[\w\+\#]+)*', text)
-        
-        # Add common technical terms and skills
-        for word in words:
-            word = word.strip().lower()
-            # Check if word is in any of our predefined skills
-            for category_skills in SKILL_CATEGORIES.values():
-                if word in [skill.lower() for skill in category_skills]:
-                    if word not in requirements['required_skills']:
-                        requirements['required_skills'].append(word)
-    
-    # Find years of experience
-    experience_patterns = [
-        r'(\d+)[\s-]*anos de experiência',
-        r'experiência de (\d+)[\s-]*anos',
-        r'(\d+)[\s-]*years of experience'
-    ]
-    
-    for pattern in experience_patterns:
-        match = re.search(pattern, text)
-        if match:
-            requirements['experience_years'] = int(match.group(1))
-            break
-    
-    # Find education requirements
-    education_patterns = [
-        r'graduação em .*?(?=\n|\Z)',
-        r'formação em .*?(?=\n|\Z)',
-        r'bacharel em .*?(?=\n|\Z)',
-        r'degree in .*?(?=\n|\Z)'
-    ]
-    
-    for pattern in education_patterns:
-        matches = re.findall(pattern, text, re.IGNORECASE)
-        requirements['education'].extend(matches)
-    
-    return requirements
+def extract_text_from_docx(file_path):
+    """Extract text from a DOCX file."""
+    try:
+        doc = Document(file_path)
+        text = []
+        for paragraph in doc.paragraphs:
+            text.append(paragraph.text)
+        return '\n'.join(text).strip()
+    except Exception as e:
+        print(f"Error extracting text from DOCX: {e}")
+        return None
 
 def generate_feedback(cv_text, job_description):
     """Generate detailed feedback comparing CV with job requirements."""
-    cv_skills = find_skills(cv_text)
-    job_requirements = extract_requirements(job_description)
-    
-    # Initialize missing_skills
-    missing_skills = []
-    
-    # Calculate basic similarity score
-    similarity_score = fuzz.token_set_ratio(cv_text, job_description)
-    
-    # Analyze matches and gaps
-    feedback = []
-    feedback.append("📊 Análise do seu CV:\n")
-    
-    # Skills found in CV
-    feedback.append("\n💪 Pontos Fortes:")
-    for category, skills in cv_skills.items():
-        if skills:
-            category_name = category.replace('_', ' ').title()
-            feedback.append(f"\n• {category_name}: {', '.join(skills)}")
-    
-    # Required skills analysis
-    if job_requirements['required_skills']:
-        feedback.append("\n\n📋 Requisitos da Vaga:")
-        matched_skills = []
-        missing_skills = []  # Reset missing_skills here
-        
-        for skill in job_requirements['required_skills']:
-            skill_found = False
-            for category_skills in cv_skills.values():
-                if skill in [s.lower() for s in category_skills]:
-                    matched_skills.append(skill)
-                    skill_found = True
-                    break
-            if not skill_found:
-                missing_skills.append(skill)
-        
-        if matched_skills:
-            feedback.append(f"\n✅ Requisitos Atendidos: {', '.join(matched_skills)}")
-        if missing_skills:
-            feedback.append(f"\n❌ Requisitos Faltantes: {', '.join(missing_skills)}")
-    
-    # Experience analysis
-    if job_requirements['experience_years']:
-        feedback.append(f"\n\n⏳ Experiência Requerida: {job_requirements['experience_years']} anos")
-    
-    # Education analysis
-    if job_requirements['education']:
-        feedback.append("\n\n📚 Formação Acadêmica Requerida:")
-        for edu in job_requirements['education']:
-            feedback.append(f"\n• {edu}")
-    
-    # Recommendations
-    feedback.append("\n\n💡 Recomendações:")
-    if similarity_score < 60:
-        feedback.append("\n• Considere adicionar mais palavras-chave específicas da vaga")
-        feedback.append("\n• Detalhe melhor suas experiências relacionadas aos requisitos")
-    if missing_skills:  # Now missing_skills is always defined
-        feedback.append("\n• Destaque projetos ou experiências relacionados aos requisitos faltantes")
-        feedback.append("\n• Se possui conhecimento em alguma das habilidades faltantes, adicione-as ao CV")
-    
-    feedback.append("\n\n📝 Dicas Gerais:")
-    feedback.append("\n• Mantenha o CV conciso e objetivo")
-    feedback.append("\n• Use bullets points para listar realizações")
-    feedback.append("\n• Quantifique resultados quando possível")
-    feedback.append("\n• Personalize o CV para cada vaga")
-    
-    return {
-        "similarity_score": similarity_score,
-        "feedback": "\n".join(feedback)
-    }
-
-def analyze_cv(cv_text, job_description):
-    """Analyze CV against job description and generate feedback."""
     try:
-        result = generate_feedback(cv_text, job_description)
-        return result
+        # Generate AI feedback using OpenAI
+        prompt = f"""Analise este currículo para a vaga descrita e forneça um feedback detalhado em português.
+
+Currículo:
+{cv_text}
+
+Descrição da Vaga:
+{job_description}
+
+Por favor, forneça uma análise estruturada incluindo:
+1. Resumo da compatibilidade
+2. Pontos fortes identificados
+3. Áreas para melhoria
+4. Sugestões específicas
+5. Habilidades técnicas encontradas
+6. Soft skills identificadas
+
+Use emojis adequados para cada seção e mantenha o tom profissional e construtivo."""
+
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=1000
+        )
+
+        feedback = response.choices[0].message.content
+
+        # Simular um score de compatibilidade baseado no comprimento do feedback
+        similarity_score = min(len(feedback.split()) / 10, 100)  # 1 ponto para cada 10 palavras, max 100
+
+        return {
+            "similarity_score": similarity_score,
+            "feedback": feedback,
+            "using_ai": True
+        }
+        
     except Exception as e:
         return {
             "similarity_score": 0,
-            "feedback": f"Erro ao analisar CV: {str(e)}"
+            "feedback": f"Erro ao analisar CV: {str(e)}",
+            "using_ai": False
         }
 
 @app.route('/')
@@ -242,44 +116,87 @@ def index():
     return render_template('index.html')
 
 @app.route('/analyze', methods=['POST'])
-def analyze():
-    if 'cv_file' not in request.files:
-        return jsonify({"error": "Nenhum arquivo enviado"}), 400
+@token_required
+def analyze(current_user):
+    # Verificar se o usuário pode fazer análise
+    if not current_user.subscription or not current_user.subscription.can_analyze():
+        return jsonify({
+            "error": "Limite de análises atingido ou assinatura expirada",
+            "subscription_required": True
+        }), 403
     
-    file = request.files['cv_file']
+    cv_text = request.form.get('cv_text', '')
     job_description = request.form.get('job_description', '')
+    cv_file = request.files.get('cv_file')
     
-    if file.filename == '':
-        return jsonify({"error": "Nenhum arquivo selecionado"}), 400
+    # Se não houver texto do CV nem arquivo, retorna erro
+    if not cv_text and not cv_file:
+        return jsonify({"error": "CV não fornecido"}), 400
     
     if not job_description:
         return jsonify({"error": "Descrição da vaga não fornecida"}), 400
     
-    # Save uploaded file
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
-    file.save(file_path)
-    
     try:
-        # Extract text based on file type
-        if file.filename.lower().endswith('.pdf'):
-            cv_text = extract_text_from_pdf(file_path)
-        elif file.filename.lower().endswith('.docx'):
-            cv_text = extract_text_from_docx(file_path)
-        else:
-            return jsonify({"error": "Formato de arquivo não suportado"}), 400
+        # Se um arquivo foi enviado, processa-o
+        if cv_file and cv_file.filename:
+            if not allowed_file(cv_file.filename):
+                return jsonify({"error": "Tipo de arquivo não suportado. Use PDF ou DOCX"}), 400
+            
+            # Salva o arquivo com um nome seguro
+            filename = werkzeug.utils.secure_filename(cv_file.filename)
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            cv_file.save(file_path)
+            
+            # Extrai o texto do arquivo
+            if filename.endswith('.pdf'):
+                cv_text = extract_text_from_pdf(file_path)
+            else:  # .docx
+                cv_text = extract_text_from_docx(file_path)
+            
+            # Remove o arquivo após extrair o texto
+            os.remove(file_path)
+            
+            if not cv_text:
+                return jsonify({"error": "Não foi possível extrair texto do arquivo"}), 400
         
         # Analyze CV
-        result = analyze_cv(cv_text, job_description)
+        result = generate_feedback(cv_text, job_description)
         
-        # Clean up uploaded file
-        os.remove(file_path)
+        # Save analysis
+        analysis = Analysis(
+            user_id=current_user.id,
+            cv_filename=cv_file.filename if cv_file else "Texto direto",
+            job_description=job_description,
+            similarity_score=result['similarity_score'],
+            feedback=result['feedback'],
+            using_ai=result.get('using_ai', False)
+        )
+        db.session.add(analysis)
+        
+        # Update subscription usage
+        current_user.subscription.use_analysis()
+        db.session.commit()
         
         return jsonify(result)
     
     except Exception as e:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        return jsonify({"error": f"Erro ao processar arquivo: {str(e)}"}), 500
+        return jsonify({"error": f"Erro ao processar análise: {str(e)}"}), 500
+
+@app.route('/history')
+@token_required
+def get_history(current_user):
+    analyses = Analysis.query.filter_by(user_id=current_user.id)\
+        .order_by(Analysis.created_at.desc())\
+        .limit(10)\
+        .all()
+    
+    return jsonify([{
+        'id': a.id,
+        'cv_filename': a.cv_filename,
+        'similarity_score': a.similarity_score,
+        'created_at': a.created_at.isoformat(),
+        'using_ai': a.using_ai
+    } for a in analyses])
 
 if __name__ == '__main__':
     app.run(debug=True) 
